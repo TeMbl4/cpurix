@@ -1,0 +1,97 @@
+#!/usr/bin/env perl
+
+use strict;
+
+my $processes = $ARGV[0];
+if (!defined($processes)) {
+	$processes="setrix"
+}
+
+my $holdtime = $ARGV[1];
+if (!defined($holdtime)) {
+	$holdtime=3;
+}
+
+my @pids = GetProcessList($processes);
+my $size = @pids;
+
+my ($currApp,$currSys,$lastApp,$lastSys,$cores);
+while () {
+	print qq{\nCPU Utilization for $processes process. Refresh each $holdtime seconds\n};
+	foreach my $pid (@pids) {
+		($lastApp,$lastSys) = ReadFromFile($pid);
+		my $pidName = GetPidName($pid);
+		($currApp,$currSys,$cores)=GetCurrentLoads($pid);
+		printf "%5.1f\%\t$pid\t$pidName\n",($currApp-$lastApp)/($currSys-$lastSys)*$cores*100 if defined $currApp and defined $lastApp and defined $currSys and defined $lastSys;
+		($lastApp,$lastSys)=($currApp,$currSys);
+		WriteToFile($pid,$lastApp,$lastSys);
+	}
+	print qq{$size instances are running\n};
+sleep $holdtime;
+}
+
+sub GetProcessList {
+	my $process = shift;
+        open (PID, "pidof $process|");
+		while (my $line = <PID>) {
+			my @list = split(" ", $line);
+			return @list;
+		}
+        close PID;
+}
+
+sub GetCurrentLoads {
+    my $pid=shift;
+    my $fh;
+    my $line;
+    open $fh,'<',"/proc/$pid/stat" or return undef;
+    $line=<$fh>;
+    close $fh;
+    return undef unless $line=~/^\d+ \([^)]+\) \S \d+ \d+ \d+ \d+ -?\d+ \d+ \d+ \d+ \d+ \d+ (\d+) (\d+)/;
+    my $TimeApp=$1+$2; #Total time spent for the process
+    my $TimeSystem=0;
+    my $CpuCount=0;
+    open $fh,'<',"/proc/stat" or return undef;
+    while (defined($line=<$fh>)) {
+        if ($line=~/^cpu\s/) {
+            foreach my $nr ($line=~/\d+/g) { $TimeSystem+=$nr; };
+            next;
+        };
+        $CpuCount++ if $line=~/^cpu\d/;
+    }
+    close $fh;
+    return undef if $TimeSystem==0;
+    return $TimeApp,$TimeSystem,$CpuCount;
+}
+
+sub GetPidName {
+	my $pid = shift;
+	open (PID, "ps -p $pid -f | awk '{print \$8\" \"\$9}' | grep -v \"CMD\" |");
+		foreach my $name (<PID>) {
+			chomp($name);
+			return $name;
+		}
+	close PID;
+}
+
+sub ReadFromFile {
+	my $pid = shift;
+	my $tmpfile = "/tmp/cpurix.$pid.tmp";
+	open(FH,"<$tmpfile");
+		foreach my $line (<FH>){
+			($pid,$lastApp,$lastSys) = split(",",$line);
+			return $lastApp,$lastSys;
+		}
+	close FH;
+}
+
+sub WriteToFile {
+	my $pid = shift;
+	my $lastApp = shift;
+	my $lastSys = shift;
+	my $tmpfile = "/tmp/cpurix.$pid.tmp";
+	open(FH,"+>$tmpfile");
+		print FH "$pid,$lastApp,$lastSys";
+	close FH;
+}
+
